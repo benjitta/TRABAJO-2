@@ -1,4 +1,155 @@
+# -------------------------------------------------------------------
+# Proyecto Data Science: Predicción Generación Solar (Atacama)
+# Estudiantes: Jesús Cornejo, Benjamin Valverde, javier Delgado, Yorkshua Cerda
+# -------------------------------------------------------------------
 
+import os
+import time
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import requests
+import warnings
+
+# Sklearn & Keras (TODO: limpiar imports que no se estén usando al final)
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+from imblearn.over_sampling import SMOTE
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+
+warnings.filterwarnings("ignore")
+np.random.seed(42) # Fijar semilla para reproducibilidad
+
+# --- FASE 1: EXTRACCIÓN Y PREPROCESAMIENTO ---
+
+def fetch_nasa_power_data(anio_inicio=2019, anio_fin=2023, archivo_local='historico_solar.csv'):
+    # Check rápido por si ya descargamos la data antes (ahorra tiempo de API)
+    if os.path.exists(archivo_local):
+        print(f"[OK] Cargando dataset local: {archivo_local}")
+        df_raw = pd.read_csv(archivo_local)
+        df_raw['Fecha_Hora'] = pd.to_datetime(df_raw['Fecha_Hora'])
+        return df_raw
+
+    dfs_anuales = []
+    print(f"Iniciando request a NASA POWER ({anio_inicio}-{anio_fin})...")
+
+    for year in range(anio_inicio, anio_fin + 1):
+        print(f"Descargando data {year}...")
+        
+        # Formateo de fechas para la API
+        url = "https://power.larc.nasa.gov/api/temporal/hourly/point"
+        params = {
+            "parameters": "ALLSKY_SFC_SW_DWN,T2M,WS10M,RH2M,CLOUD_AMT",
+            "community":  "RE",
+            "longitude":  -68.2006,
+            "latitude":   -22.9087,
+            "start":      f"{year}0101",
+            "end":        f"{year}1231",
+            "format":     "JSON",
+        }
+
+        # Manejo de reintentos por si se cae la conexión
+        for intento in range(3):
+            try:
+                res = requests.get(url, params=params, timeout=60)
+                res.raise_for_status()
+                break
+            except requests.exceptions.RequestException as e:
+                print(f"Fallo en intento {intento+1} para {year}: {e}")
+                time.sleep(5)
+
+        data = res.json()
+        p_data = data['properties']['parameter']
+
+        # Armar dataframes temporales
+        df_rad = pd.DataFrame(list(p_data['ALLSKY_SFC_SW_DWN'].items()), columns=['Fecha_Hora', 'Radiacion_W_m2'])
+        df_temp = pd.DataFrame(list(p_data['T2M'].items()), columns=['Fecha_Hora', 'Temperatura_C'])
+        df_viento = pd.DataFrame(list(p_data['WS10M'].items()), columns=['Fecha_Hora', 'Viento_m_s'])
+        df_humedad = pd.DataFrame(list(p_data['RH2M'].items()), columns=['Fecha_Hora', 'Humedad_Rel_%'])
+        df_nubes = pd.DataFrame(list(p_data['CLOUD_AMT'].items()), columns=['Fecha_Hora', 'Nubosidad_%'])
+
+        # Merge sucesivo
+        df_year = df_rad.copy()
+        for df_extra in [df_temp, df_viento, df_humedad, df_nubes]:
+            df_year = pd.merge(df_year, df_extra, on='Fecha_Hora')
+
+        dfs_anuales.append(df_year)
+        time.sleep(2) # delay para no saturar la API
+
+    df_final = pd.concat(dfs_anuales, ignore_index=True)
+    df_final['Fecha_Hora'] = pd.to_datetime(df_final['Fecha_Hora'], format='%Y%m%d%H')
+    
+    # Limpieza básica
+    df_final = df_final.replace(-999.0, np.nan)
+    # df_final.dropna(inplace=True) # Mejor imputar después para no perder horas enteras
+    df_final = df_final.sort_values('Fecha_Hora').reset_index(drop=True)
+    
+    # Feature Engineering: Codificación Cíclica de la Hora
+    df_final['hora'] = df_final['Fecha_Hora'].dt.hour
+    df_final['hora_sin'] = np.sin(2 * np.pi * df_final['hora'] / 24)
+    df_final['hora_cos'] = np.cos(2 * np.pi * df_final['hora'] / 24)
+    
+    df_final.to_csv(archivo_local, index=False)
+    print("Descarga finalizada y guardada.")
+    return df_final
+
+
+def calcular_generacion(df):
+    """ Calcula MW usando fórmula física base + ruido blanco """
+    base_mw = (df['Radiacion_W_m2'] * 150000 * 0.21 * 0.75) / 1_000_000
+    # clipping en 0 porque no podemos generar energía negativa
+    return (base_mw + np.random.normal(0, 15.0, len(df))).clip(lower=0)
+
+
+# --- FASE 2: EDA (Análisis Exploratorio) ---
+
+def plot_eda_basico(df):
+    print("\n[Generando gráficos EDA...]")
+    sns.set_theme(style="whitegrid")
+    cols_numericas = ['Radiacion_W_m2', 'Temperatura_C', 'Viento_m_s', 'Humedad_Rel_%', 'Nubosidad_%', 'Generacion_MW']
+    
+    # Distribuciones
+    fig, axes = plt.subplots(2, len(cols_numericas), figsize=(20, 8))
+    plt.suptitle('Distribuciones y Outliers', fontsize=14)
+    
+    for i, col in enumerate(cols_numericas):
+        sns.histplot(df[col], kde=True, ax=axes[0, i], color='#1f77b4')
+        axes[0, i].set_title(col, fontsize=10)
+        sns.boxplot(y=df[col], ax=axes[1, i], color='#2ca02c')
+        axes[1, i].set_ylabel('')
+        
+    plt.tight_layout()
+    plt.show()
+
+    # Matriz de correlación y Scatters
+    fig = plt.figure(figsize=(16, 5))
+    
+    ax1 = plt.subplot(1, 4, 1)
+    corr = df[cols_numericas].corr()
+    # Solo mostramos la correlación contra el target
+    sns.heatmap(corr[['Generacion_MW']].sort_values(by='Generacion_MW', ascending=False), 
+                annot=True, cmap='coolwarm', vmin=-1, vmax=1, ax=ax1, cbar=False)
+    ax1.set_title('Corr vs Generación')
+
+    # Scatter plots rápidos
+    colors = ['darkorange', 'firebrick', 'slategray']
+    x_vars = ['Radiacion_W_m2', 'Temperatura_C', 'Nubosidad_%']
+    
+    for idx, (var, color) in enumerate(zip(x_vars, colors), 2):
+        ax = plt.subplot(1, 4, idx)
+        sns.scatterplot(data=df.sample(2000), x=var, y='Generacion_MW', alpha=0.4, color=color, ax=ax)
+        # plt.title(f'{var}')
+        
+    plt.tight_layout()
+    plt.show()
 #SPLIT, IMPUTACIÓN Y OUTLIERS
 
 def prepare_datasets(df_raw):
