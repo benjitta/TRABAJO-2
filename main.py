@@ -1,3 +1,80 @@
+
+#SPLIT, IMPUTACIÓN Y OUTLIERS
+
+def prepare_datasets(df_raw):
+    df_train_val, df_test = train_test_split(df_raw, test_size=0.20, shuffle=False)
+    df_train, df_val = train_test_split(df_train_val, test_size=0.20, shuffle=False)
+
+    cols = ['Radiacion_W_m2', 'Temperatura_C', 'Viento_m_s', 'Humedad_Rel_%', 'Nubosidad_%']
+    imputer = KNNImputer(n_neighbors=5)
+    
+    df_train.loc[:, cols] = imputer.fit_transform(df_train[cols])
+    df_val.loc[:, cols] = imputer.transform(df_val[cols])
+    df_test.loc[:, cols] = imputer.transform(df_test[cols])
+
+    for df in [df_train, df_val, df_test]:
+        df = df[df['Radiacion_W_m2'] > 0].reset_index(drop=True)
+        df['Generacion_MW'] = crear_generacion(df)
+
+    q1 = df_train['Generacion_MW'].quantile(0.25)
+    q3 = df_train['Generacion_MW'].quantile(0.75)
+    limite_sup = q3 + 1.5 * (q3 - q1)
+
+    for df in [df_train, df_val, df_test]:
+        df['Generacion_MW'] = np.where(df['Generacion_MW'] > limite_sup, limite_sup, df['Generacion_MW'])
+
+    return df_train, df_val, df_test
+
+def prepare_features(df_train, df_val, df_test):
+    features = ['Radiacion_W_m2', 'Temperatura_C', 'Viento_m_s', 'Humedad_Rel_%', 'Nubosidad_%', 'hora_sin', 'hora_cos']
+    return (df_train[features], df_train['Generacion_MW'], 
+            df_val[features], df_val['Generacion_MW'], 
+            df_test[features], df_test['Generacion_MW'])
+
+def build_preprocessor(X_train):
+    numeric_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = X_train.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
+
+    transformers = [('scaler', StandardScaler(), numeric_cols)]
+    
+    if categorical_cols:
+        transformers.append(('ohe', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_cols))
+
+    return ColumnTransformer(transformers=transformers, remainder='drop')
+
+#REGRESIÓN
+
+
+def train_regression_models(X_train, y_train):
+    lr = LinearRegression().fit(X_train, y_train)
+    rf = RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42).fit(X_train, y_train)
+    return lr, rf
+
+def print_regression_results(models, X_test, y_test):
+    predictions = {}
+    for nombre, modelo in models:
+        y_pred = modelo.predict(X_test)
+        predictions[nombre] = y_pred
+        print(f"\n{nombre}: R²={r2_score(y_test, y_pred):.4f}, RMSE={np.sqrt(mean_squared_error(y_test, y_pred)):.4f}")
+    return predictions
+
+def plot_regression_comparison(y_test, predictions):
+    plt.figure(figsize=(10, 5))
+    plt.plot(y_test.values, label='Real', alpha=0.8)
+    for nombre, y_pred in predictions.items():
+        plt.plot(y_pred, label=nombre, alpha=0.7)
+    plt.legend()
+    plt.show()
+
+
+
+
+
+
+
+
+
+
 # CLASIFICACIÓN
 def plot_class_distribution(y_train_c, y_test_c):
     """Gráfico de barras original restaurado"""
