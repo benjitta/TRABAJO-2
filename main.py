@@ -428,3 +428,52 @@ def evaluate_dl_model(modelo_dl, X_test_pre, y_test_c):
     matriz_resultante = confusion_matrix(y_test_c, y_pred_dl)
     plot_confusion_matrix(matriz_resultante, 'Matriz de confusión — Deep Learning')
     plot_roc_pr_curve(y_test_c, y_proba_dl, 'Deep Learning')
+
+
+def main():
+    df_raw = fetch_nasa_power_data(anio_inicio=2019, anio_fin=2023)
+    df_train, df_val, df_test = prepare_datasets(df_raw)
+    
+    X_train, y_train, X_val, y_val, X_test, y_test = prepare_features(df_train, df_val, df_test)
+
+    preprocessor = build_preprocessor(X_train)
+    X_train_pre  = preprocessor.fit_transform(X_train)
+    X_val_pre    = preprocessor.transform(X_val)
+    X_test_pre   = preprocessor.transform(X_test)
+
+    # Regresión
+    modelo_lineal, rf = train_regression_models(X_train_pre, y_train)
+    predictions = print_regression_results([("Regresión Lineal", modelo_lineal), ("Random Forest", rf)], X_test_pre, y_test)
+    plot_regression_comparison(y_test, predictions)
+
+    # Clasificación (Logística vs KNN)
+    threshold, X_train_smote, y_train_smote = train_and_evaluate_classifiers(
+        X_train_pre, y_train, X_test_pre, np.where(y_test > np.quantile(y_train, 0.75), 1, 0)
+    )
+    y_test_c = np.where(y_test > threshold, 1, 0)
+    y_val_c  = np.where(y_val  > threshold, 1, 0)
+
+    # Deep Learning
+    modelo_dl = build_deep_learning_model(X_train_pre.shape[1])
+    print('\n' + '=' * 55)
+    print('DEEP LEARNING — RESUMEN DEL MODELO')
+    print('=' * 55)
+    modelo_dl.summary()
+
+    history = modelo_dl.fit(
+        X_train_smote, y_train_smote,
+        epochs=30, batch_size=32,
+        validation_data=(X_val_pre, y_val_c),   
+        callbacks=[
+            EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-6),
+        ],
+        verbose=1,
+    )
+
+    plot_training_history_dl(history)
+    evaluate_dl_model(modelo_dl, X_test_pre, y_test_c)
+
+
+if _name_ == '_main_':
+    main()
