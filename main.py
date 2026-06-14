@@ -1,6 +1,4 @@
-# =========================================================
-# FASE 5: CLASIFICACIÓN (MANTENIENDO GRÁFICOS ORIGINALES)
-# =========================================================
+# FASE 5: CLASIFICACIÓN 
 def plot_class_distribution(y_train_c, y_test_c):
     """Gráfico de barras original restaurado"""
     labels       = ['No Alto', 'Alto']
@@ -109,10 +107,7 @@ def train_and_evaluate_classifiers(X_train, y_train, X_test, y_test_c):
     print(f"\n>> El mejor modelo clásico es: {mejor_modelo} (ROC-AUC: {mejor_auc:.4f})")
     return threshold, X_train_smote, y_train_smote
 
-
-# =========================================================
 # FASE 6: DEEP LEARNING — MLP BINARIO
-# =========================================================
 def build_deep_learning_model(input_shape):
     model = Sequential([
         Dense(64, activation='relu', kernel_initializer='he_uniform', input_shape=(input_shape,)),
