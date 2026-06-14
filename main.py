@@ -1,4 +1,4 @@
-# CLASIFICACIÓN (MANTENIENDO GRÁFICOS ORIGINALES)
+# CLASIFICACIÓN
 def plot_class_distribution(y_train_c, y_test_c):
     """Gráfico de barras original restaurado"""
     labels       = ['No Alto', 'Alto']
