@@ -1,5 +1,6 @@
 # Proyecto Data Science - Prediccion Generacion Solar Atacama
 # Integrantes: Jesus Cornejo, Benjamin Valverde, Javier Delgado, Yorkshua Cerda
+#https://canva.link/qpgrh1gr6f2c5mf enlace de la presentacion
 
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0' # Apaga el mensaje molesto de TensorFlow
